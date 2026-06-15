@@ -884,9 +884,15 @@ async function onFaceDetected(descriptor){
       return;
     } else { // 'login'
       stopFaceLoop(); // pause detection while verifying
+      // Always show the beautiful "Verifying…" animation (with the
+      // camera blurred behind it) BEFORE we reveal success/failure.
       showFaceOverlay('verifying','Verifying…','Hold still');
+      const MIN_VERIFY_MS = 1400; // guarantee the animation is seen
+      const startedAt = Date.now();
       try {
         const r = await api('verifyFace',{ email: ctx.email, descriptor });
+        const elapsed = Date.now() - startedAt;
+        if (elapsed < MIN_VERIFY_MS) await wait(MIN_VERIFY_MS - elapsed);
         showFaceOverlay('success','Checked In','Welcome back');
         await wait(900);
         setSession(r.user); showEmployee();
@@ -896,6 +902,8 @@ async function onFaceDetected(descriptor){
         hideFaceOverlay();
         return;
       } catch(err){
+        const elapsed = Date.now() - startedAt;
+        if (elapsed < MIN_VERIFY_MS) await wait(MIN_VERIFY_MS - elapsed);
         showFaceOverlay('error','Face did not match','Trying again…');
         await wait(1200);
         hideFaceOverlay();
