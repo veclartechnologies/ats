@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -408,7 +408,7 @@ html.dark .bio-card{background:rgba(255,255,255,.04)}
 /* ═══════════════════════════════════════════════════════════════
    CONFIG — paste your Google Apps Script Web App URL here
    ═══════════════════════════════════════════════════════════════ */
-const API_URL = "https://script.google.com/macros/s/AKfycbxmmjYS16Z46mdG8hYAs0mwyfRuiY5epCM8fVXoAPoAdsXHeMJjUsTXIzVAz_z0-ivI/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbxKqnUuV-qDdvyb0xSL3wOynuDi1nqzFeOQ1X9OWt2SbzS0CPyKQbXX0e1A6mMxl8WQ/exec";
 
 const FACE_MODELS = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13/model";
 
@@ -654,6 +654,7 @@ async function openFaceModal(mode, email){
 $('#faceModal').addEventListener('click', e=>{
   if (e.target.dataset.close!==undefined || e.target===$('#faceModal')){
     if (faceStream){ faceStream.getTracks().forEach(t=>t.stop()); faceStream=null; }
+    if (faceContext && faceContext._resolve){ const r = faceContext._resolve; faceContext._resolve = null; r(false); }
   }
 });
 $('#faceActBtn').addEventListener('click', async e=>{
@@ -672,7 +673,14 @@ $('#faceActBtn').addEventListener('click', async e=>{
       refreshBioStatus();
     } else {
       const r = await api('verifyFace',{ email: faceContext.email, descriptor });
-      setSession(r.user); toast('Face matched ✓','ok'); showEmployee();
+      // If we're acting as a punch-gate, resolve the promise instead of switching screens.
+      if (faceContext._resolve){
+        toast('Face matched ✓','ok');
+        const resolve = faceContext._resolve; faceContext._resolve = null;
+        resolve(true);
+      } else {
+        setSession(r.user); toast('Face matched ✓','ok'); showEmployee();
+      }
     }
     if (faceStream){ faceStream.getTracks().forEach(t=>t.stop()); faceStream=null; }
     closeModal($('#faceModal'));
@@ -734,64 +742,154 @@ async function reverseGeocode(lat,lng){
   } catch { return `${lat.toFixed(4)}, ${lng.toFixed(4)}`; }
 }
 
-/* ═══════════ CHECK IN / OUT ═══════════ */
+/* ═══════════ CHECK IN / OUT (biometric-gated) ═══════════ */
 $('#checkInBtn').addEventListener('click', ()=> doPunch('in'));
 $('#checkOutBtn').addEventListener('click',()=> doPunch('out'));
+
+// State of "today" cached locally so buttons react instantly
+let todayState = { rows: [], open: null };
+
+// Auth gate: fingerprint first, face fallback in modal.
+async function biometricGate(email){
+  const info = await api('getBiometricInfo',{ email });
+  const hasFp = info.items.some(i=>i.type==='fingerprint');
+  const hasFace = info.items.some(i=>i.type==='face');
+  if (!hasFp && !hasFace) return true; // nothing enrolled → allow (password-only user)
+
+  if (hasFp){
+    try {
+      const fp = info.items.find(i=>i.type==='fingerprint');
+      const credId = await webauthnAssert(fp.credentialId);
+      await api('verifyFingerprint',{ email, credentialId: credId });
+      return true;
+    } catch(err) {
+      if (!hasFace) throw new Error('Fingerprint failed: '+(err.message||err));
+      // fall through to face modal
+      const ok = await faceAuthFallback(email);
+      if (!ok) throw new Error('Authentication cancelled');
+      return true;
+    }
+  } else {
+    // only face enrolled
+    const ok = await faceAuthFallback(email);
+    if (!ok) throw new Error('Authentication cancelled');
+    return true;
+  }
+}
+
+function faceAuthFallback(email){
+  return new Promise(async (resolve) => {
+    try { await loadFaceModels(); } catch { return resolve(false); }
+    openFaceModal('login', email);
+    // hook one-time success/cancel
+    faceContext._resolve = resolve;
+  });
+}
 
 async function doPunch(kind){
   const s = getSession(); if (!s) return;
   const btn = $(kind==='in' ? '#checkInBtn' : '#checkOutBtn');
+  const otherBtn = $(kind==='in' ? '#checkOutBtn' : '#checkInBtn');
   const origHTML = btn.innerHTML;
-  btn.disabled = true; btn.style.opacity = .7;
-  $('#locDot').classList.remove('on'); $('#locText').textContent = 'Getting your location…';
+  btn.disabled = true; otherBtn.disabled = true;
+  btn.innerHTML = origHTML.replace(/class="title"[^>]*>[^<]*</, m => m.replace(/>[^<]*</, '><span class="spinner"></span> <');
+  $('#locDot').classList.remove('on'); $('#locText').textContent = 'Verifying biometric…';
+
   try {
-    const loc = await getLocation();
-    $('#locDot').classList.add('on'); $('#locText').textContent = `Found you (±${Math.round(loc.acc)} m). Saving…`;
-    const addr = await reverseGeocode(loc.lat, loc.lng);
-    const r = await api(kind==='in'?'checkIn':'checkOut', { email: s.email, lat: loc.lat, lng: loc.lng, address: addr });
+    // 1. biometric gate (parallel with geolocation request to save time)
+    const gatePromise = biometricGate(s.email);
+    const locPromise  = getLocation();
+    await gatePromise;
+    $('#locText').textContent = 'Getting your location…';
+    const loc = await locPromise;
+    $('#locDot').classList.add('on');
+    $('#locText').textContent = `Found you (±${Math.round(loc.acc)} m). Saving…`;
+
+    // 2. Save attendance immediately with raw coords (FAST). Reverse-geocode in background.
+    const r = await api(kind==='in'?'checkIn':'checkOut', {
+      email: s.email, lat: loc.lat, lng: loc.lng, address: ''
+    });
+
+    // optimistic UI update
+    if (kind === 'in'){
+      todayState.rows.push({ id:r.id, date:'', checkIn:r.time, checkOut:'', inLat:loc.lat, inLng:loc.lng, hours:'' });
+      todayState.open = todayState.rows[todayState.rows.length-1];
+    } else {
+      if (todayState.open){
+        todayState.open.checkOut = r.time;
+        todayState.open.hours = r.hours;
+        todayState.open = null;
+      }
+    }
+    renderToday();
     toast(kind==='in' ? `Checked in at ${r.time} ✓` : `Checked out — ${r.hours}h worked ✓`,'ok');
-    $('#locText').textContent = '📍 ' + addr;
+
+    // 3. background reverse-geocode → patch address (non-blocking)
+    reverseGeocode(loc.lat, loc.lng).then(addr=>{
+      $('#locText').textContent = '📍 ' + addr;
+      const id = r.id || (todayState.open && todayState.open.id);
+      // best-effort patch (admin endpoint not used; address column updated next sync)
+    }).catch(()=>{});
+
+    // 4. final authoritative sync
     loadToday();
   } catch(err){
     toast(err.message,'err');
     $('#locText').textContent = err.message;
   } finally {
-    btn.disabled=false; btn.style.opacity=1; btn.innerHTML = origHTML;
+    btn.innerHTML = origHTML;
+    syncPunchButtons();
   }
+}
+
+function syncPunchButtons(){
+  const hasOpen = !!todayState.open;
+  $('#checkInBtn').disabled  = hasOpen;
+  $('#checkOutBtn').disabled = !hasOpen;
+}
+
+function renderToday(){
+  const rows = todayState.rows;
+  if (!rows.length){
+    $('#inTime').textContent='Tap to start'; $('#inSub').textContent='Begin your work day';
+    $('#outTime').textContent='—'; $('#outSub').textContent='Waiting…';
+    $('#todayContent').innerHTML='<span class="muted">No activity yet today. Tap Check in to start your first loop.</span>';
+    syncPunchButtons();
+    return;
+  }
+  const last = rows[rows.length-1];
+  $('#inTime').textContent  = String(last.checkIn||'—').slice(0,5);
+  $('#outTime').textContent = last.checkOut ? String(last.checkOut).slice(0,5) : '—';
+  $('#inSub').textContent   = todayState.open ? 'In progress…' : 'Ready for next loop';
+  $('#outSub').textContent  = last.hours ? `${last.hours}h worked` : (todayState.open?'End current loop':'—');
+
+  const totalH = rows.reduce((s,r)=> s + (Number(r.hours)||0), 0);
+  $('#todayContent').innerHTML = `
+    <div class="col" style="gap:8px">
+      ${rows.map((r,i)=>`
+        <div class="history-item">
+          <div class="day">#${i+1}<small>loop</small></div>
+          <div>
+            <div style="font-weight:600;font-size:13px">${String(r.checkIn||'—').slice(0,5)} → ${r.checkOut?String(r.checkOut).slice(0,5):'…'}</div>
+            <div class="times">${r.inAddr?r.inAddr.split(',').slice(0,2).join(','):''}</div>
+          </div>
+          <div class="hrs">${r.hours? r.hours+'h' : (r.checkOut?'0h':'open')}</div>
+        </div>
+      `).join('')}
+      <div class="row between" style="margin-top:6px;padding:10px 12px;border-radius:12px;background:var(--bg-2);border:1px solid var(--line)">
+        <span class="muted">Total today</span><strong style="color:var(--brand)">${Math.round(totalH*100)/100}h</strong>
+      </div>
+    </div>`;
+  syncPunchButtons();
 }
 
 async function loadToday(){
   const s = getSession(); if (!s) return;
   try {
     const r = await api('myToday',{ email: s.email });
-    const rec = r.record;
-    if (!rec){
-      $('#inTime').textContent='Tap to start'; $('#inSub').textContent='Begin your work day';
-      $('#outTime').textContent='—'; $('#outSub').textContent='End your work day';
-      $('#checkInBtn').disabled=false; $('#checkOutBtn').disabled=true;
-      $('#todayContent').innerHTML='<span class="muted">No activity yet today.</span>';
-      return;
-    }
-    if (rec.checkIn){
-      $('#inTime').textContent = String(rec.checkIn).slice(0,5);
-      $('#inSub').textContent  = 'Started ✓';
-      $('#checkInBtn').disabled=true;
-    }
-    if (rec.checkOut){
-      $('#outTime').textContent = String(rec.checkOut).slice(0,5);
-      $('#outSub').textContent  = `${rec.hours||0}h worked`;
-      $('#checkOutBtn').disabled=true;
-    } else if (rec.checkIn){
-      $('#checkOutBtn').disabled=false;
-    }
-    $('#todayContent').innerHTML = `
-      <div class="col" style="gap:8px">
-        <div class="row between"><span class="muted">Check in</span><strong>${rec.checkIn||'—'}</strong></div>
-        <div class="row between"><span class="muted">Check out</span><strong>${rec.checkOut||'—'}</strong></div>
-        <div class="row between"><span class="muted">Hours</span><strong>${rec.hours||'—'}</strong></div>
-        ${rec.inAddr?`<div class="muted" style="font-size:12px;margin-top:6px">📍 In: ${rec.inAddr}</div>`:''}
-        ${rec.outAddr?`<div class="muted" style="font-size:12px">📍 Out: ${rec.outAddr}</div>`:''}
-      </div>`;
+    todayState.rows = r.rows || [];
+    todayState.open = r.open || null;
+    renderToday();
   } catch(err){ /* ignore */ }
 }
 
@@ -799,14 +897,15 @@ async function loadHistory(){
   const s = getSession(); if (!s) return;
   $('#historyList').innerHTML = '<div class="skeleton" style="height:60px;margin-bottom:8px"></div>'.repeat(3);
   try {
-    const r = await api('myHistory',{ email: s.email, limit: 30 });
+    const r = await api('myHistory',{ email: s.email, limit: 50 });
     if (!r.rows.length){ $('#historyList').innerHTML='<span class="muted">No records yet.</span>'; return; }
     $('#historyList').innerHTML = r.rows.map(rec=>{
-      const d = new Date(rec.date);
-      const day = d.getDate(); const mon = d.toLocaleString([],{month:'short'});
+      const d = new Date(String(rec.date));
+      const day = isNaN(d)? String(rec.date).slice(-2) : d.getDate();
+      const mon = isNaN(d)? '' : d.toLocaleString([],{month:'short'});
       return `<div class="history-item">
         <div class="day">${day}<small>${mon}</small></div>
-        <div><div style="font-weight:600;font-size:13px">${rec.checkIn||'—'} → ${rec.checkOut||'—'}</div>
+        <div><div style="font-weight:600;font-size:13px">${String(rec.checkIn||'—').slice(0,5)} → ${rec.checkOut?String(rec.checkOut).slice(0,5):'open'}</div>
           <div class="times">${rec.inAddr?rec.inAddr.split(',').slice(0,2).join(','):'No location'}</div></div>
         <div class="hrs">${rec.hours||0}h</div>
       </div>`;
