@@ -290,7 +290,7 @@ html.dark .bio-card{background:rgba(255,255,255,.04)}
         </button>
       </div>
 
-      <div class="status-line"><span class="dot" id="locDot"></span><span id="locText">Tap a button — we'll grab your location.</span></div>
+      <div class="status-line hide" id="statusLine"><span class="dot" id="locDot"></span><span id="locText"></span></div>
     </div>
 
     <div class="subtabs" id="empTabs">
@@ -380,11 +380,10 @@ html.dark .bio-card{background:rgba(255,255,255,.04)}
   <div class="modal" style="position:relative">
     <button class="theme-btn close" data-close>✕</button>
     <h3 id="faceTitle">Face scan</h3>
-    <p class="muted" id="faceHint" style="margin:0 0 14px">Center your face in the circle.</p>
+    <p class="muted" id="faceHint" style="margin:0 0 14px">Look at the camera — detection is automatic.</p>
     <div class="face-stage"><video id="faceVideo" autoplay muted playsinline></video><div class="face-frame"></div></div>
     <div class="row" style="gap:10px;margin-top:14px">
       <button class="btn btn-ghost btn-block" data-close>Cancel</button>
-      <button class="btn btn-primary btn-block" id="faceActBtn"><span id="faceActLabel">Capture</span></button>
     </div>
     <p class="muted" id="faceStatusLine" style="text-align:center;font-size:12px;margin:10px 0 0">Loading face models…</p>
   </div>
@@ -651,6 +650,7 @@ $('#bioFaceBtn').addEventListener('click', async ()=>{
 /* ═══════════ FACE RECOGNITION ═══════════ */
 let faceReady = false;
 let faceStream = null;
+let faceLoopId = null;
 async function loadFaceModels(){
   if (faceReady) return;
   $('#faceStatusLine').textContent = 'Loading face models (~6 MB)…';
@@ -659,52 +659,91 @@ async function loadFaceModels(){
   await faceapi.nets.faceRecognitionNet.loadFromUri(FACE_MODELS);
   faceReady = true;
 }
-let faceContext = null; // {mode:'enroll'|'login', email}
+let faceContext = null; // {mode:'enroll'|'login'|'capture', email, _resolve?}
+
+function stopFaceLoop(){
+  if (faceLoopId){ cancelAnimationFrame(faceLoopId); faceLoopId = null; }
+  if (faceStream){ faceStream.getTracks().forEach(t=>t.stop()); faceStream=null; }
+}
+
 async function openFaceModal(mode, email){
   faceContext = { mode, email };
-  $('#faceTitle').textContent = mode==='enroll' ? 'Enroll your face' : 'Face sign-in';
-  $('#faceHint').textContent  = mode==='enroll' ? 'Look at the camera — we\'ll capture a single secure descriptor.' : 'Look at the camera to authenticate.';
-  $('#faceActLabel').textContent = mode==='enroll' ? 'Enroll face' : 'Authenticate';
+  $('#faceTitle').textContent = mode==='enroll' ? 'Enroll your face' : 'Face authentication';
+  $('#faceHint').textContent  = mode==='enroll'
+    ? 'Look at the camera — we\'ll capture automatically.'
+    : 'Look at the camera — detection is automatic.';
   openModal('faceModal');
   try {
     faceStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user', width:480, height:480 } });
     $('#faceVideo').srcObject = faceStream;
-    $('#faceStatusLine').textContent = 'Ready when you are.';
+    $('#faceStatusLine').textContent = 'Looking for your face…';
+    startFaceAutoDetect();
   } catch(e){ toast('Camera permission denied','err'); closeModal($('#faceModal')); }
 }
-$('#faceModal').addEventListener('click', e=>{
-  if (e.target.dataset.close!==undefined || e.target===$('#faceModal')){
-    if (faceStream){ faceStream.getTracks().forEach(t=>t.stop()); faceStream=null; }
-    if (faceContext && faceContext._resolve){ const r = faceContext._resolve; faceContext._resolve = null; r(false); }
-  }
-});
-$('#faceActBtn').addEventListener('click', async e=>{
-  const btn = e.target.closest('button');
-  busy(btn,true);
+
+function startFaceAutoDetect(){
+  const video = $('#faceVideo');
+  let working = false;
+  const tick = async ()=>{
+    if (!faceContext || !faceStream) return;
+    if (!working && video.readyState >= 2){
+      working = true;
+      try {
+        const det = await faceapi.detectSingleFace(
+          video, new faceapi.TinyFaceDetectorOptions({ inputSize:224, scoreThreshold:.5 })
+        ).withFaceLandmarks().withFaceDescriptor();
+        if (det && faceContext){
+          await onFaceDetected(Array.from(det.descriptor));
+          return; // loop ends inside onFaceDetected
+        }
+      } catch {}
+      working = false;
+    }
+    faceLoopId = requestAnimationFrame(tick);
+  };
+  faceLoopId = requestAnimationFrame(tick);
+}
+
+async function onFaceDetected(descriptor){
+  const ctx = faceContext;
+  $('#faceStatusLine').textContent = 'Face detected — verifying…';
   try {
-    const video = $('#faceVideo');
-    const det = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize:320, scoreThreshold:.5 }))
-      .withFaceLandmarks().withFaceDescriptor();
-    if (!det) throw new Error('No face detected — try better lighting');
-    const descriptor = Array.from(det.descriptor);
-    if (faceContext.mode==='enroll'){
+    if (ctx.mode === 'enroll'){
       const s = getSession();
       await api('enrollBiometric',{ email: s.email, type:'face', data:{ descriptor } });
       toast('Face enrolled ✓','ok');
       refreshBioStatus();
-    } else if (faceContext.mode==='capture'){
-      // Punch flow — caller awaits the descriptor and handles verification server-side.
-      const resolve = faceContext._resolve; faceContext._resolve = null;
+    } else if (ctx.mode === 'capture'){
+      const resolve = ctx._resolve; ctx._resolve = null;
+      stopFaceLoop();
+      closeModal($('#faceModal'));
+      faceContext = null;
       resolve(descriptor);
-    } else {
-      // Legacy login-from-auth-screen path.
-      const r = await api('verifyFace',{ email: faceContext.email, descriptor });
+      return;
+    } else { // 'login'
+      const r = await api('verifyFace',{ email: ctx.email, descriptor });
       setSession(r.user); toast('Face matched ✓','ok'); showEmployee();
     }
-    if (faceStream){ faceStream.getTracks().forEach(t=>t.stop()); faceStream=null; }
+    stopFaceLoop();
     closeModal($('#faceModal'));
-  } catch(err){ toast(err.message,'err'); }
-  finally{ busy(btn,false, faceContext.mode==='enroll'?'Enroll face':'Authenticate'); }
+    faceContext = null;
+  } catch(err){
+    $('#faceStatusLine').textContent = err.message + ' — retrying…';
+    // Resume scanning on transient errors.
+    setTimeout(()=>{ if (faceContext) startFaceAutoDetect(); }, 800);
+  }
+}
+
+// Close handler — stop stream/loop and resolve capture promise with null.
+$('#faceModal').addEventListener('click', e=>{
+  if (e.target.dataset.close!==undefined || e.target===$('#faceModal')){
+    stopFaceLoop();
+    if (faceContext && faceContext._resolve){
+      const r = faceContext._resolve; faceContext._resolve = null;
+      r(null);
+    }
+    faceContext = null;
+  }
 });
 
 
@@ -713,11 +752,13 @@ async function refreshBioStatus(){
   const s = getSession(); if (!s) return;
   try {
     const info = await api('getBiometricInfo',{ email: s.email });
-    const has = t => info.items.some(i=>i.type===t);
-    $('#fingerStatus').textContent = has('fingerprint') ? 'Active' : 'Not set';
-    $('#fingerStatus').classList.toggle('off', !has('fingerprint'));
-    $('#faceStatus').textContent   = has('face') ? 'Active' : 'Not set';
-    $('#faceStatus').classList.toggle('off', !has('face'));
+    const fp   = info.items.find(i=>i.type==='fingerprint');
+    const face = info.items.find(i=>i.type==='face');
+    bioCache = { fingerprint: fp ? { credentialId: fp.credentialId } : null, face: !!face };
+    $('#fingerStatus').textContent = fp ? 'Active' : 'Not set';
+    $('#fingerStatus').classList.toggle('off', !fp);
+    $('#faceStatus').textContent   = face ? 'Active' : 'Not set';
+    $('#faceStatus').classList.toggle('off', !face);
   } catch{}
 }
 $('#enrollFingerBtn').addEventListener('click', async e=>{
@@ -770,20 +811,20 @@ $('#checkOutBtn').addEventListener('click',()=> doPunch('out'));
 let todayState = { rows: [], open: null };
 let busyPunching = false;
 
-/* Capture a face descriptor through the face modal (no server call here).
-   Resolves with Float32Array-like number[] or null if the user cancels. */
+/* Capture a face descriptor through the auto-detect face modal.
+   Resolves with number[] descriptor or null if the user cancels. */
 function captureFaceDescriptor(email){
   return new Promise(async (resolve) => {
     try { await loadFaceModels(); } catch { return resolve(null); }
     faceContext = { mode:'capture', email, _resolve: resolve };
     $('#faceTitle').textContent = 'Verify your face';
-    $('#faceHint').textContent  = 'Look at the camera to authorise this action.';
-    $('#faceActLabel').textContent = 'Authenticate';
+    $('#faceHint').textContent  = 'Look at the camera — detection is automatic.';
     openModal('faceModal');
     try {
       faceStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user', width:480, height:480 } });
       $('#faceVideo').srcObject = faceStream;
-      $('#faceStatusLine').textContent = 'Ready when you are.';
+      $('#faceStatusLine').textContent = 'Looking for your face…';
+      startFaceAutoDetect();
     } catch(e){
       toast('Camera permission denied','err');
       closeModal($('#faceModal'));
@@ -813,18 +854,29 @@ function askUseFace(){
   });
 }
 
+/* Biometric cache — populated on login/showEmployee so the WebAuthn prompt
+   can fire instantly on tap without a round-trip lookup. */
+let bioCache = null; // { fingerprint?: {credentialId}, face?: true }
+async function primeBioCache(email){
+  try {
+    const info = await api('getBiometricInfo', { email });
+    const fp   = info.items.find(i=>i.type==='fingerprint');
+    const face = info.items.find(i=>i.type==='face');
+    bioCache = { fingerprint: fp ? { credentialId: fp.credentialId } : null, face: !!face };
+  } catch { bioCache = null; }
+}
+
 /* Build the auth payload for the unified `punch` action.
-   Fingerprint first; on failure, present a modal asking whether to use face. */
+   Fingerprint first (instant prompt via cache); on failure → face fallback modal. */
 async function buildAuth(email){
-  const info = await api('getBiometricInfo', { email });
-  const hasFp   = info.items.some(i=>i.type==='fingerprint');
-  const hasFace = info.items.some(i=>i.type==='face');
+  if (!bioCache) await primeBioCache(email);
+  const hasFp   = !!(bioCache && bioCache.fingerprint);
+  const hasFace = !!(bioCache && bioCache.face);
   if (!hasFp && !hasFace) return { type:'none' };
 
   if (hasFp){
     try {
-      const fp = info.items.find(i=>i.type==='fingerprint');
-      const credentialId = await webauthnAssert(fp.credentialId);
+      const credentialId = await webauthnAssert(bioCache.fingerprint.credentialId);
       return { type:'fingerprint', credentialId };
     } catch(err){
       if (!hasFace) throw new Error('Fingerprint failed — and no face enrolled');
@@ -835,7 +887,6 @@ async function buildAuth(email){
       return { type:'face', descriptor };
     }
   }
-  // Only face is enrolled — go straight to face.
   const descriptor = await captureFaceDescriptor(email);
   if (!descriptor) throw new Error('Face capture cancelled');
   return { type:'face', descriptor };
@@ -854,26 +905,37 @@ async function doPunch(kind){
   const otherBtn = $(kind==='in' ? '#checkOutBtn' : '#checkInBtn');
   const origHTML = btn.innerHTML;
   btn.disabled = true; otherBtn.disabled = true;
-  btn.innerHTML = origHTML.replace(/class="title"[^>]*>[^<]*</, m => m.replace(/>[^<]*</, '><span class="spinner"></span> <'));
-  $('#locDot').classList.remove('on'); $('#locText').textContent = 'Verifying biometric…';
+
+  // Kick off auth + location in parallel BEFORE touching the UI — the
+  // WebAuthn prompt should appear the instant the user taps.
+  const locPromise  = getLocation().catch(()=>null);
+  const authPromise = buildAuth(s.email);
 
   try {
-    // Kick off geolocation in parallel — by the time biometric is done, location is ready.
-    const locPromise = getLocation().catch(err => { throw err; });
-    const auth = await buildAuth(s.email);
-    $('#locText').textContent = 'Getting your location…';
-    const loc = await locPromise;
-    $('#locDot').classList.add('on');
-    $('#locText').textContent = `Found you (±${Math.round(loc.acc)} m). Saving…`;
+    const auth = await authPromise;
 
-    // Single atomic round trip: verify + write.
+    // Optimistic UI: show "done" the moment biometric clears, even though
+    // the server write is still in flight.
+    const nowStr = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+    if (kind === 'in'){
+      $('#inTime').textContent = nowStr;
+      $('#inSub').textContent  = 'Saving…';
+    } else {
+      $('#outTime').textContent = nowStr;
+      $('#outSub').textContent  = 'Saving…';
+    }
+    toast(kind==='in' ? `Checked in ✓` : `Checked out ✓`,'ok');
+
+    const loc = await locPromise;
+    if (!loc) throw new Error('Could not verify your device — please retry');
+
+    // Server round trip — happens silently in the background.
     const r = await api('punch', {
       email: s.email, kind, lat: loc.lat, lng: loc.lng, address: '', auth
     });
 
-    // Optimistic local update — instant UI, no extra fetch needed.
     if (kind === 'in'){
-      const row = { id:r.id, date:'', checkIn:r.time, checkOut:'', inLat:loc.lat, inLng:loc.lng, hours:'', inAddr:'' };
+      const row = { id:r.id, date:'', checkIn:r.time, checkOut:'', hours:'' };
       todayState.rows.push(row);
       todayState.open = row;
     } else if (todayState.open){
@@ -882,18 +944,10 @@ async function doPunch(kind){
       todayState.open = null;
     }
     renderToday();
-    toast(kind==='in' ? `Checked in at ${String(r.time).slice(0,5)} ✓` : `Checked out — ${r.hours}h ✓`,'ok');
-
-    // Background reverse-geocode (display only — non-blocking).
-    reverseGeocode(loc.lat, loc.lng).then(addr=>{
-      $('#locText').textContent = '📍 ' + addr;
-      const last = todayState.rows[todayState.rows.length-1];
-      if (last && kind==='in') last.inAddr = addr;
-      renderToday();
-    }).catch(()=>{});
   } catch(err){
     toast(err.message,'err');
-    $('#locText').textContent = err.message;
+    // Revert optimistic UI on failure.
+    renderToday();
   } finally {
     btn.innerHTML = origHTML;
     busyPunching = false;
@@ -931,7 +985,6 @@ function renderToday(){
           <div class="day">#${i+1}<small>loop</small></div>
           <div>
             <div style="font-weight:600;font-size:13px">${String(r.checkIn||'—').slice(0,5)} → ${r.checkOut?String(r.checkOut).slice(0,5):'…'}</div>
-            <div class="times">${r.inAddr?r.inAddr.split(',').slice(0,2).join(','):''}</div>
           </div>
           <div class="hrs">${r.hours? r.hours+'h' : (r.checkOut?'0h':'open')}</div>
         </div>
@@ -965,8 +1018,7 @@ async function loadHistory(){
       const mon = isNaN(d)? '' : d.toLocaleString([],{month:'short'});
       return `<div class="history-item">
         <div class="day">${day}<small>${mon}</small></div>
-        <div><div style="font-weight:600;font-size:13px">${String(rec.checkIn||'—').slice(0,5)} → ${rec.checkOut?String(rec.checkOut).slice(0,5):'open'}</div>
-          <div class="times">${rec.inAddr?rec.inAddr.split(',').slice(0,2).join(','):'No location'}</div></div>
+        <div><div style="font-weight:600;font-size:13px">${String(rec.checkIn||'—').slice(0,5)} → ${rec.checkOut?String(rec.checkOut).slice(0,5):'open'}</div></div>
         <div class="hrs">${rec.hours||0}h</div>
       </div>`;
     }).join('');
@@ -983,6 +1035,7 @@ function showEmployee(){
   $('#empName').textContent = (s?.name || 'there') + ' ✨';
   loadToday();
   refreshBioStatus();
+  primeBioCache(s.email);
 }
 function showAdmin(){
   $('#authScreen').classList.add('hide');
