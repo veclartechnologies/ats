@@ -401,6 +401,25 @@ html.dark .bio-card{background:rgba(255,255,255,.04)}
   </div>
 </div>
 
+<!-- ─── BIOMETRIC CHOICE MODAL (fingerprint failed → offer face) ─── -->
+<div class="modal-bg" id="bioChoiceModal">
+  <div class="modal" style="position:relative;max-width:380px">
+    <button class="theme-btn close" data-close>✕</button>
+    <h3 id="bioChoiceTitle">Fingerprint didn't match</h3>
+    <p class="muted" style="margin:0 0 16px" id="bioChoiceSub">Would you like to authenticate with Face Recognition instead?</p>
+    <div class="row" style="gap:10px">
+      <button class="btn btn-ghost btn-block" data-close>Cancel</button>
+      <button class="btn btn-primary btn-block" id="bioChoiceFaceBtn">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9 10h.01M15 10h.01"/><path d="M8 15s1.5 2 4 2 4-2 4-2"/></svg>
+        Use Face
+      </button>
+    </div>
+  </div>
+</div>
+
+
+
+
 <div id="toast"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
@@ -408,7 +427,7 @@ html.dark .bio-card{background:rgba(255,255,255,.04)}
 /* ═══════════════════════════════════════════════════════════════
    CONFIG — paste your Google Apps Script Web App URL here
    ═══════════════════════════════════════════════════════════════ */
-const API_URL = "https://script.google.com/macros/s/AKfycbxKqnUuV-qDdvyb0xSL3wOynuDi1nqzFeOQ1X9OWt2SbzS0CPyKQbXX0e1A6mMxl8WQ/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbxxQ4c4zOMYD1S6v9tpDWEMs2QB-nrfGDip1Z0535FNdnQXA9uK4iq0kx-Q4L5h2_Ij/exec";
 
 const FACE_MODELS = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13/model";
 
@@ -485,9 +504,11 @@ $$('#empTabs button').forEach(b=>b.addEventListener('click',()=>{
   ['today','history','profile'].forEach(t=>{
     $('#empTab-'+t).classList.toggle('hide', t!==b.dataset.tab);
   });
+  if (b.dataset.tab==='today')   loadToday();
   if (b.dataset.tab==='history') loadHistory();
   if (b.dataset.tab==='profile') refreshBioStatus();
 }));
+
 
 /* ═══════════ AUTH ═══════════ */
 const SESSION_KEY = 'pulse_session';
@@ -671,22 +692,21 @@ $('#faceActBtn').addEventListener('click', async e=>{
       await api('enrollBiometric',{ email: s.email, type:'face', data:{ descriptor } });
       toast('Face enrolled ✓','ok');
       refreshBioStatus();
+    } else if (faceContext.mode==='capture'){
+      // Punch flow — caller awaits the descriptor and handles verification server-side.
+      const resolve = faceContext._resolve; faceContext._resolve = null;
+      resolve(descriptor);
     } else {
+      // Legacy login-from-auth-screen path.
       const r = await api('verifyFace',{ email: faceContext.email, descriptor });
-      // If we're acting as a punch-gate, resolve the promise instead of switching screens.
-      if (faceContext._resolve){
-        toast('Face matched ✓','ok');
-        const resolve = faceContext._resolve; faceContext._resolve = null;
-        resolve(true);
-      } else {
-        setSession(r.user); toast('Face matched ✓','ok'); showEmployee();
-      }
+      setSession(r.user); toast('Face matched ✓','ok'); showEmployee();
     }
     if (faceStream){ faceStream.getTracks().forEach(t=>t.stop()); faceStream=null; }
     closeModal($('#faceModal'));
   } catch(err){ toast(err.message,'err'); }
   finally{ busy(btn,false, faceContext.mode==='enroll'?'Enroll face':'Authenticate'); }
 });
+
 
 /* ═══════════ ENROLLMENT (from profile tab) ═══════════ */
 async function refreshBioStatus(){
@@ -748,99 +768,139 @@ $('#checkOutBtn').addEventListener('click',()=> doPunch('out'));
 
 // State of "today" cached locally so buttons react instantly
 let todayState = { rows: [], open: null };
+let busyPunching = false;
 
-// Auth gate: fingerprint first, face fallback in modal.
-async function biometricGate(email){
-  const info = await api('getBiometricInfo',{ email });
-  const hasFp = info.items.some(i=>i.type==='fingerprint');
+/* Capture a face descriptor through the face modal (no server call here).
+   Resolves with Float32Array-like number[] or null if the user cancels. */
+function captureFaceDescriptor(email){
+  return new Promise(async (resolve) => {
+    try { await loadFaceModels(); } catch { return resolve(null); }
+    faceContext = { mode:'capture', email, _resolve: resolve };
+    $('#faceTitle').textContent = 'Verify your face';
+    $('#faceHint').textContent  = 'Look at the camera to authorise this action.';
+    $('#faceActLabel').textContent = 'Authenticate';
+    openModal('faceModal');
+    try {
+      faceStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user', width:480, height:480 } });
+      $('#faceVideo').srcObject = faceStream;
+      $('#faceStatusLine').textContent = 'Ready when you are.';
+    } catch(e){
+      toast('Camera permission denied','err');
+      closeModal($('#faceModal'));
+      resolve(null);
+    }
+  });
+}
+
+/* Ask the user whether to fall back to face. Resolves true/false. */
+function askUseFace(){
+  return new Promise(resolve => {
+    openModal('bioChoiceModal');
+    const modal = $('#bioChoiceModal');
+    const yes = $('#bioChoiceFaceBtn');
+    const cleanup = (val) => {
+      yes.removeEventListener('click', onYes);
+      modal.removeEventListener('click', onClick);
+      closeModal(modal);
+      resolve(val);
+    };
+    const onYes   = () => cleanup(true);
+    const onClick = (e) => {
+      if (e.target === modal || e.target.dataset.close !== undefined) cleanup(false);
+    };
+    yes.addEventListener('click', onYes);
+    modal.addEventListener('click', onClick);
+  });
+}
+
+/* Build the auth payload for the unified `punch` action.
+   Fingerprint first; on failure, present a modal asking whether to use face. */
+async function buildAuth(email){
+  const info = await api('getBiometricInfo', { email });
+  const hasFp   = info.items.some(i=>i.type==='fingerprint');
   const hasFace = info.items.some(i=>i.type==='face');
-  if (!hasFp && !hasFace) return true; // nothing enrolled → allow (password-only user)
+  if (!hasFp && !hasFace) return { type:'none' };
 
   if (hasFp){
     try {
       const fp = info.items.find(i=>i.type==='fingerprint');
-      const credId = await webauthnAssert(fp.credentialId);
-      await api('verifyFingerprint',{ email, credentialId: credId });
-      return true;
-    } catch(err) {
-      if (!hasFace) throw new Error('Fingerprint failed: '+(err.message||err));
-      // fall through to face modal
-      const ok = await faceAuthFallback(email);
-      if (!ok) throw new Error('Authentication cancelled');
-      return true;
+      const credentialId = await webauthnAssert(fp.credentialId);
+      return { type:'fingerprint', credentialId };
+    } catch(err){
+      if (!hasFace) throw new Error('Fingerprint failed — and no face enrolled');
+      const useFace = await askUseFace();
+      if (!useFace) throw new Error('Authentication cancelled');
+      const descriptor = await captureFaceDescriptor(email);
+      if (!descriptor) throw new Error('Face capture cancelled');
+      return { type:'face', descriptor };
     }
-  } else {
-    // only face enrolled
-    const ok = await faceAuthFallback(email);
-    if (!ok) throw new Error('Authentication cancelled');
-    return true;
   }
-}
-
-function faceAuthFallback(email){
-  return new Promise(async (resolve) => {
-    try { await loadFaceModels(); } catch { return resolve(false); }
-    openFaceModal('login', email);
-    // hook one-time success/cancel
-    faceContext._resolve = resolve;
-  });
+  // Only face is enrolled — go straight to face.
+  const descriptor = await captureFaceDescriptor(email);
+  if (!descriptor) throw new Error('Face capture cancelled');
+  return { type:'face', descriptor };
 }
 
 async function doPunch(kind){
+  if (busyPunching) return;
   const s = getSession(); if (!s) return;
+
+  // Enforce loop order client-side too (server also enforces).
+  if (kind === 'in'  && todayState.open) return toast('You already have an open loop','err');
+  if (kind === 'out' && !todayState.open) return toast('Check in first','err');
+
+  busyPunching = true;
   const btn = $(kind==='in' ? '#checkInBtn' : '#checkOutBtn');
   const otherBtn = $(kind==='in' ? '#checkOutBtn' : '#checkInBtn');
   const origHTML = btn.innerHTML;
   btn.disabled = true; otherBtn.disabled = true;
-  btn.innerHTML = origHTML.replace(/class="title"[^>]*>[^<]*</, m => m.replace(/>[^<]*</, '><span class="spinner"></span> <');
+  btn.innerHTML = origHTML.replace(/class="title"[^>]*>[^<]*</, m => m.replace(/>[^<]*</, '><span class="spinner"></span> <'));
   $('#locDot').classList.remove('on'); $('#locText').textContent = 'Verifying biometric…';
 
   try {
-    // 1. biometric gate (parallel with geolocation request to save time)
-    const gatePromise = biometricGate(s.email);
-    const locPromise  = getLocation();
-    await gatePromise;
+    // Kick off geolocation in parallel — by the time biometric is done, location is ready.
+    const locPromise = getLocation().catch(err => { throw err; });
+    const auth = await buildAuth(s.email);
     $('#locText').textContent = 'Getting your location…';
     const loc = await locPromise;
     $('#locDot').classList.add('on');
     $('#locText').textContent = `Found you (±${Math.round(loc.acc)} m). Saving…`;
 
-    // 2. Save attendance immediately with raw coords (FAST). Reverse-geocode in background.
-    const r = await api(kind==='in'?'checkIn':'checkOut', {
-      email: s.email, lat: loc.lat, lng: loc.lng, address: ''
+    // Single atomic round trip: verify + write.
+    const r = await api('punch', {
+      email: s.email, kind, lat: loc.lat, lng: loc.lng, address: '', auth
     });
 
-    // optimistic UI update
+    // Optimistic local update — instant UI, no extra fetch needed.
     if (kind === 'in'){
-      todayState.rows.push({ id:r.id, date:'', checkIn:r.time, checkOut:'', inLat:loc.lat, inLng:loc.lng, hours:'' });
-      todayState.open = todayState.rows[todayState.rows.length-1];
-    } else {
-      if (todayState.open){
-        todayState.open.checkOut = r.time;
-        todayState.open.hours = r.hours;
-        todayState.open = null;
-      }
+      const row = { id:r.id, date:'', checkIn:r.time, checkOut:'', inLat:loc.lat, inLng:loc.lng, hours:'', inAddr:'' };
+      todayState.rows.push(row);
+      todayState.open = row;
+    } else if (todayState.open){
+      todayState.open.checkOut = r.time;
+      todayState.open.hours = r.hours;
+      todayState.open = null;
     }
     renderToday();
-    toast(kind==='in' ? `Checked in at ${r.time} ✓` : `Checked out — ${r.hours}h worked ✓`,'ok');
+    toast(kind==='in' ? `Checked in at ${String(r.time).slice(0,5)} ✓` : `Checked out — ${r.hours}h ✓`,'ok');
 
-    // 3. background reverse-geocode → patch address (non-blocking)
+    // Background reverse-geocode (display only — non-blocking).
     reverseGeocode(loc.lat, loc.lng).then(addr=>{
       $('#locText').textContent = '📍 ' + addr;
-      const id = r.id || (todayState.open && todayState.open.id);
-      // best-effort patch (admin endpoint not used; address column updated next sync)
+      const last = todayState.rows[todayState.rows.length-1];
+      if (last && kind==='in') last.inAddr = addr;
+      renderToday();
     }).catch(()=>{});
-
-    // 4. final authoritative sync
-    loadToday();
   } catch(err){
     toast(err.message,'err');
     $('#locText').textContent = err.message;
   } finally {
     btn.innerHTML = origHTML;
+    busyPunching = false;
     syncPunchButtons();
   }
 }
+
 
 function syncPunchButtons(){
   const hasOpen = !!todayState.open;
