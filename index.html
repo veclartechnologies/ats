@@ -185,6 +185,39 @@ html.dark .bio-card{background:rgba(255,255,255,.04)}
 .face-frame::after{content:"";width:60%;aspect-ratio:1;border-radius:50%;border:3px dashed rgba(255,255,255,.7);animation:spin 8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 
+/* ─────────── fingerprint enrollment (banking-grade UX) ─────────── */
+.fp-stage{position:relative;display:flex;flex-direction:column;align-items:center;gap:14px;padding:18px 6px}
+.fp-ring{position:relative;width:170px;height:170px;border-radius:50%;display:grid;place-items:center;background:var(--grad-soft);box-shadow:inset 0 0 0 1px var(--line)}
+.fp-ring::before,.fp-ring::after{content:"";position:absolute;inset:-2px;border-radius:50%;border:2px solid transparent}
+.fp-ring::before{border-top-color:var(--brand);border-right-color:var(--brand-2);animation:fpSpin 1.6s linear infinite}
+.fp-ring.scanning::after{border-bottom-color:var(--accent);animation:fpSpin 2.6s linear infinite reverse}
+@keyframes fpSpin{to{transform:rotate(360deg)}}
+.fp-icon{width:84px;height:84px;color:var(--brand);position:relative;z-index:1}
+.fp-ring.scanning .fp-icon{animation:fpPulse 1.1s ease-in-out infinite}
+@keyframes fpPulse{0%,100%{transform:scale(1);filter:none}50%{transform:scale(1.06);filter:drop-shadow(0 0 14px color-mix(in oklab,var(--brand) 60%,transparent))}}
+.fp-ring.success{background:color-mix(in oklab,var(--ok) 14%,transparent)}
+.fp-ring.success .fp-icon{color:var(--ok)}
+.fp-ring.success::before,.fp-ring.success::after{animation:none;border-color:transparent}
+.fp-ring.error{background:color-mix(in oklab,var(--err) 14%,transparent)}
+.fp-ring.error .fp-icon{color:var(--err)}
+.fp-ring.error::before,.fp-ring.error::after{animation:none;border-color:transparent}
+.fp-scanbar{position:absolute;left:14%;right:14%;top:50%;height:2px;background:linear-gradient(90deg,transparent,var(--brand),transparent);border-radius:2px;opacity:0;z-index:2}
+.fp-ring.scanning .fp-scanbar{animation:fpScan 1.4s ease-in-out infinite;opacity:1}
+@keyframes fpScan{0%{transform:translateY(-44px)}50%{transform:translateY(44px)}100%{transform:translateY(-44px)}}
+.fp-steps{display:flex;gap:6px;justify-content:center;margin-top:4px}
+.fp-steps .dot{width:30px;height:4px;border-radius:2px;background:var(--line-2);transition:.3s}
+.fp-steps .dot.active{background:var(--brand)}
+.fp-steps .dot.done{background:var(--ok)}
+.fp-title{font-size:17px;font-weight:700;text-align:center;margin:6px 0 0}
+.fp-sub{font-size:13px;color:var(--ink-mute);text-align:center;max-width:320px;margin:0 auto;line-height:1.5}
+.fp-checklist{display:flex;flex-direction:column;gap:8px;margin:10px 0 4px}
+.fp-checklist .item{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:12px;background:var(--bg-2);border:1px solid var(--line);font-size:13px}
+.fp-checklist .item.ok{border-color:color-mix(in oklab,var(--ok) 40%,var(--line));background:color-mix(in oklab,var(--ok) 6%,var(--bg-2))}
+.fp-checklist .item .tick{width:20px;height:20px;border-radius:50%;background:var(--line);display:grid;place-items:center;flex-shrink:0;font-size:12px;color:var(--ink-mute)}
+.fp-checklist .item.ok .tick{background:var(--ok);color:#fff}
+.fp-secure{display:flex;align-items:center;gap:8px;justify-content:center;font-size:11px;color:var(--ink-mute);margin-top:10px;padding:8px 12px;background:var(--bg-2);border:1px solid var(--line);border-radius:10px}
+.fp-secure svg{width:14px;height:14px;color:var(--ok)}
+
 /* ─────────── loader / shimmer ─────────── */
 .spinner{width:18px;height:18px;border:2.5px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:rot .8s linear infinite}
 .spinner.dark{border-color:var(--line-2);border-top-color:var(--brand)}
@@ -389,6 +422,85 @@ html.dark .bio-card{background:rgba(255,255,255,.04)}
   </div>
 </div>
 
+<!-- ─── FINGERPRINT ENROLLMENT MODAL (banking-grade) ─── -->
+<div class="modal-bg" id="fpEnrollModal">
+  <div class="modal" style="position:relative;max-width:420px">
+    <button class="theme-btn close" data-close>✕</button>
+
+    <!-- STEP 1: intro + device compatibility checklist -->
+    <div id="fpStep-intro">
+      <h3 style="margin:0 0 4px">Set up fingerprint sign-in</h3>
+      <p class="fp-sub" style="margin:6px 0 16px">Securely link your device's fingerprint sensor to your account using your device's secure enclave.</p>
+      <div class="fp-checklist">
+        <div class="item" id="fpCheck-webauthn"><span class="tick">!</span><span>WebAuthn supported by this browser</span></div>
+        <div class="item" id="fpCheck-platform"><span class="tick">!</span><span>Built-in biometric sensor available</span></div>
+        <div class="item" id="fpCheck-secure"><span class="tick">!</span><span>Secure (HTTPS) connection</span></div>
+      </div>
+      <div id="fpVerifyBlock" class="hide" style="margin-top:10px">
+        <div class="field"><label>Confirm your password to continue</label><input class="input" id="fpVerifyPw" type="password" placeholder="••••••••"></div>
+      </div>
+      <button class="btn btn-primary btn-lg btn-block" id="fpBeginBtn" style="margin-top:16px" disabled>Begin enrollment</button>
+      <div class="fp-secure">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        Your fingerprint never leaves this device — only a cryptographic key is stored.
+      </div>
+    </div>
+
+    <!-- STEP 2: scanning -->
+    <div id="fpStep-scan" class="hide">
+      <h3 class="fp-title" id="fpScanTitle">Touch the sensor</h3>
+      <p class="fp-sub" id="fpScanSub">Follow your device's prompt to scan your fingerprint.</p>
+      <div class="fp-stage">
+        <div class="fp-ring scanning" id="fpRing">
+          <div class="fp-scanbar"></div>
+          <svg class="fp-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 11c0 3-1 7-2 9"/>
+            <path d="M16 11.5c0 4.5-.5 7-1.5 9.5"/>
+            <path d="M8 14c0 3-.5 6-1.5 8"/>
+            <path d="M19 12a7 7 0 0 0-14 0v1"/>
+            <path d="M12 4a8 8 0 0 1 8 8v1"/>
+            <path d="M4 13v-1a8 8 0 0 1 1.5-4.7"/>
+          </svg>
+        </div>
+        <div class="fp-steps">
+          <div class="dot active" data-step="1"></div>
+          <div class="dot" data-step="2"></div>
+          <div class="dot" data-step="3"></div>
+        </div>
+        <p class="fp-sub" id="fpStepLabel">Step 1 of 3 · Awaiting sensor</p>
+      </div>
+      <button class="btn btn-ghost btn-block" data-close style="margin-top:14px">Cancel</button>
+    </div>
+
+    <!-- STEP 3: success -->
+    <div id="fpStep-done" class="hide">
+      <div class="fp-stage">
+        <div class="fp-ring success">
+          <svg class="fp-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        </div>
+        <h3 class="fp-title">Fingerprint registered</h3>
+        <p class="fp-sub">You can now sign in and check in / out with just a touch.</p>
+      </div>
+      <button class="btn btn-primary btn-lg btn-block" data-close style="margin-top:14px">Done</button>
+    </div>
+
+    <!-- STEP 4: error -->
+    <div id="fpStep-error" class="hide">
+      <div class="fp-stage">
+        <div class="fp-ring error">
+          <svg class="fp-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </div>
+        <h3 class="fp-title" id="fpErrTitle">Enrollment failed</h3>
+        <p class="fp-sub" id="fpErrSub">Please try again.</p>
+      </div>
+      <div class="row" style="gap:10px;margin-top:14px">
+        <button class="btn btn-ghost btn-block" data-close>Close</button>
+        <button class="btn btn-primary btn-block" id="fpRetryBtn">Try again</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ─── EMAIL PROMPT MODAL (for biometric login) ─── -->
 <div class="modal-bg" id="emailModal">
   <div class="modal" style="position:relative">
@@ -426,7 +538,7 @@ html.dark .bio-card{background:rgba(255,255,255,.04)}
 /* ═══════════════════════════════════════════════════════════════
    CONFIG — paste your Google Apps Script Web App URL here
    ═══════════════════════════════════════════════════════════════ */
-const API_URL = "https://script.google.com/macros/s/AKfycbxxQ4c4zOMYD1S6v9tpDWEMs2QB-nrfGDip1Z0535FNdnQXA9uK4iq0kx-Q4L5h2_Ij/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbw9e32G0vfcHNHqQx6c2uaiOQvjkked1lVpYQV1PPoQv1efouB3MTuGKgkhcRodbi1X/exec";
 
 const FACE_MODELS = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13/model";
 
@@ -632,7 +744,11 @@ $('#bioFingerBtn').addEventListener('click', async ()=>{
     const email = await askEmail('Fingerprint sign in','We need your email to find your enrolled fingerprint.');
     const info = await api('getBiometricInfo',{ email });
     const fp = info.items.find(i=>i.type==='fingerprint');
-    if (!fp) throw new Error('No fingerprint enrolled for this email');
+    if (!fp){
+      // No fingerprint on file → offer comprehensive enrollment.
+      openFingerprintEnrollment({ email, mode:'login-then-enroll' });
+      return;
+    }
     const credId = await webauthnAssert(fp.credentialId);
     const r = await api('verifyFingerprint',{ email, credentialId: credId });
     setSession(r.user); toast('Welcome back ✨','ok'); showEmployee();
@@ -667,16 +783,16 @@ function stopFaceLoop(){
 }
 
 async function openFaceModal(mode, email){
-  faceContext = { mode, email };
+  faceContext = { mode, email, samples: [] };
   $('#faceTitle').textContent = mode==='enroll' ? 'Enroll your face' : 'Face authentication';
   $('#faceHint').textContent  = mode==='enroll'
-    ? 'Look at the camera — we\'ll capture automatically.'
+    ? 'We\'ll capture 5 samples. Slowly turn your head left, right, up & down.'
     : 'Look at the camera — detection is automatic.';
   openModal('faceModal');
   try {
-    faceStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user', width:480, height:480 } });
+    faceStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user', width:640, height:640 } });
     $('#faceVideo').srcObject = faceStream;
-    $('#faceStatusLine').textContent = 'Looking for your face…';
+    $('#faceStatusLine').textContent = mode==='enroll' ? 'Captured 0/5 — look at the camera…' : 'Looking for your face…';
     startFaceAutoDetect();
   } catch(e){ toast('Camera permission denied','err'); closeModal($('#faceModal')); }
 }
@@ -689,12 +805,18 @@ function startFaceAutoDetect(){
     if (!working && video.readyState >= 2){
       working = true;
       try {
+        // Higher inputSize + score threshold = far fewer false positives.
         const det = await faceapi.detectSingleFace(
-          video, new faceapi.TinyFaceDetectorOptions({ inputSize:224, scoreThreshold:.5 })
+          video, new faceapi.TinyFaceDetectorOptions({ inputSize:416, scoreThreshold:.6 })
         ).withFaceLandmarks().withFaceDescriptor();
         if (det && faceContext){
-          await onFaceDetected(Array.from(det.descriptor));
-          return; // loop ends inside onFaceDetected
+          // Require detector confidence ≥ 0.7 before accepting the frame.
+          if (det.detection && det.detection.score < 0.7){
+            $('#faceStatusLine').textContent = 'Move closer / improve lighting…';
+          } else {
+            await onFaceDetected(Array.from(det.descriptor));
+            return; // loop ends inside onFaceDetected (or it restarts itself)
+          }
         }
       } catch {}
       working = false;
@@ -706,12 +828,28 @@ function startFaceAutoDetect(){
 
 async function onFaceDetected(descriptor){
   const ctx = faceContext;
-  $('#faceStatusLine').textContent = 'Face detected — verifying…';
   try {
     if (ctx.mode === 'enroll'){
+      // Multi-sample enrollment — collect 5 distinct descriptors before saving.
+      ctx.samples = ctx.samples || [];
+      // Require new sample to be sufficiently different from the last to avoid
+      // 5 copies of the exact same frame (still the same person, just varied poses).
+      const last = ctx.samples[ctx.samples.length-1];
+      const dx = last ? euclid(last, descriptor) : 1;
+      if (dx < 0.05 && ctx.samples.length){
+        $('#faceStatusLine').textContent = `Captured ${ctx.samples.length}/5 — turn slightly…`;
+        faceLoopId = requestAnimationFrame(()=>startFaceAutoDetect());
+        return;
+      }
+      ctx.samples.push(descriptor);
+      $('#faceStatusLine').textContent = `Captured ${ctx.samples.length}/5 — keep looking…`;
+      if (ctx.samples.length < 5){
+        setTimeout(()=>{ if (faceContext) startFaceAutoDetect(); }, 250);
+        return;
+      }
       const s = getSession();
-      await api('enrollBiometric',{ email: s.email, type:'face', data:{ descriptor } });
-      toast('Face enrolled ✓','ok');
+      await api('enrollBiometric',{ email: s.email, type:'face', data:{ descriptors: ctx.samples } });
+      toast('Face enrolled ✓ (5 samples)','ok');
       refreshBioStatus();
     } else if (ctx.mode === 'capture'){
       const resolve = ctx._resolve; ctx._resolve = null;
@@ -721,6 +859,7 @@ async function onFaceDetected(descriptor){
       resolve(descriptor);
       return;
     } else { // 'login'
+      $('#faceStatusLine').textContent = 'Face detected — verifying…';
       const r = await api('verifyFace',{ email: ctx.email, descriptor });
       setSession(r.user); toast('Face matched ✓','ok'); showEmployee();
     }
@@ -729,9 +868,16 @@ async function onFaceDetected(descriptor){
     faceContext = null;
   } catch(err){
     $('#faceStatusLine').textContent = err.message + ' — retrying…';
-    // Resume scanning on transient errors.
+    // Resume scanning on transient errors (e.g. face-did-not-match).
     setTimeout(()=>{ if (faceContext) startFaceAutoDetect(); }, 800);
   }
+}
+
+// Local Euclidean — used during multi-sample enrollment.
+function euclid(a, b){
+  let s = 0;
+  for (let i=0;i<a.length;i++){ const d = a[i]-b[i]; s += d*d; }
+  return Math.sqrt(s);
 }
 
 // Close handler — stop stream/loop and resolve capture promise with null.
@@ -761,18 +907,139 @@ async function refreshBioStatus(){
     $('#faceStatus').classList.toggle('off', !face);
   } catch{}
 }
-$('#enrollFingerBtn').addEventListener('click', async e=>{
+$('#enrollFingerBtn').addEventListener('click', async ()=>{
   const s = getSession(); if (!s) return;
-  busy(e.target,true);
-  try {
-    if (!window.PublicKeyCredential) throw new Error('WebAuthn not supported on this browser');
-    const { credentialId } = await webauthnEnroll(s.email, s.name);
-    await api('enrollBiometric',{ email: s.email, type:'fingerprint', data:{ credentialId } });
-    toast('Fingerprint enrolled ✓','ok');
-    refreshBioStatus();
-  } catch(err){ toast(err.message || 'Fingerprint enrollment failed','err'); }
-  finally{ busy(e.target,false,'Enroll'); }
+  openFingerprintEnrollment({ email: s.email, name: s.name, mode:'enroll' });
 });
+
+/* ═══════════ BANKING-GRADE FINGERPRINT ENROLLMENT ═══════════ */
+let fpEnrollCtx = null; // { email, name, mode, password? }
+
+async function openFingerprintEnrollment(opts){
+  fpEnrollCtx = { ...opts };
+  // Reset modal state
+  $('#fpStep-intro').classList.remove('hide');
+  $('#fpStep-scan').classList.add('hide');
+  $('#fpStep-done').classList.add('hide');
+  $('#fpStep-error').classList.add('hide');
+  $('#fpVerifyBlock').classList.toggle('hide', opts.mode !== 'login-then-enroll');
+  $('#fpVerifyPw').value = '';
+  $('#fpBeginBtn').disabled = true;
+
+  // Run compatibility checks
+  const checks = await runFingerprintChecks();
+  setCheck('fpCheck-webauthn', checks.webauthn);
+  setCheck('fpCheck-platform', checks.platform);
+  setCheck('fpCheck-secure',   checks.secure);
+
+  const allOk = checks.webauthn && checks.platform && checks.secure;
+  $('#fpBeginBtn').disabled = !allOk;
+  if (!allOk){
+    $('#fpBeginBtn').textContent = 'Device not compatible';
+  } else {
+    $('#fpBeginBtn').textContent = opts.mode === 'login-then-enroll'
+      ? 'Verify password & enroll'
+      : 'Begin enrollment';
+  }
+  openModal('fpEnrollModal');
+}
+
+function setCheck(id, ok){
+  const el = $('#'+id);
+  el.classList.toggle('ok', !!ok);
+  el.querySelector('.tick').textContent = ok ? '✓' : '✕';
+}
+
+async function runFingerprintChecks(){
+  const out = { webauthn:false, platform:false, secure:false };
+  out.secure = window.isSecureContext === true || location.hostname === 'localhost';
+  out.webauthn = !!(window.PublicKeyCredential && navigator.credentials && navigator.credentials.create);
+  if (out.webauthn && PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable){
+    try { out.platform = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable(); }
+    catch { out.platform = false; }
+  }
+  return out;
+}
+
+$('#fpBeginBtn').addEventListener('click', runFingerprintEnrollFlow);
+$('#fpRetryBtn').addEventListener('click', ()=>{
+  $('#fpStep-error').classList.add('hide');
+  $('#fpStep-intro').classList.remove('hide');
+});
+
+async function runFingerprintEnrollFlow(){
+  const ctx = fpEnrollCtx; if (!ctx) return;
+
+  // For non-authenticated users we must verify password before binding a
+  // fingerprint to their account (otherwise anyone could hijack the email).
+  if (ctx.mode === 'login-then-enroll'){
+    const pw = $('#fpVerifyPw').value;
+    if (!pw){ toast('Password required','err'); return; }
+    try {
+      const r = await api('login', { email: ctx.email, password: pw });
+      ctx.name = r.user.name;
+      setSession(r.user);
+    } catch(err){
+      showFpError('Password incorrect', err.message);
+      return;
+    }
+  }
+
+  // Move to scanning step
+  $('#fpStep-intro').classList.add('hide');
+  $('#fpStep-scan').classList.remove('hide');
+  fpSetStep(1, 'Awaiting your device sensor…');
+
+  try {
+    // Step 1 → trigger OS prompt
+    await sleep(150);
+    fpSetStep(2, 'Scan your fingerprint on the sensor');
+    const { credentialId } = await webauthnEnroll(ctx.email, ctx.name);
+
+    // Step 2 → register with backend
+    fpSetStep(3, 'Securing key in your account…');
+    await api('enrollBiometric',{ email: ctx.email, type:'fingerprint', data:{ credentialId } });
+
+    // Done
+    bioCache = null;
+    refreshBioStatus();
+    $('#fpStep-scan').classList.add('hide');
+    $('#fpStep-done').classList.remove('hide');
+    toast('Fingerprint enrolled ✓','ok');
+
+    // If we logged the user in along the way, send them to the app.
+    if (ctx.mode === 'login-then-enroll'){
+      setTimeout(()=>{ closeModal($('#fpEnrollModal')); showEmployee(); }, 1200);
+    }
+  } catch(err){
+    const msg = (err && err.message) || 'Enrollment failed';
+    let friendly = msg;
+    if (/NotAllowed/i.test(msg)) friendly = 'You cancelled or the sensor timed out. Please try again.';
+    else if (/InvalidState/i.test(msg)) friendly = 'A fingerprint for this account already exists on this device.';
+    else if (/SecurityError/i.test(msg)) friendly = 'Your browser blocked the request. Make sure you\'re on HTTPS.';
+    else if (/NotSupported/i.test(msg)) friendly = 'This device doesn\'t support fingerprint authentication.';
+    showFpError('Couldn\'t register fingerprint', friendly);
+  }
+}
+
+function fpSetStep(n, label){
+  $$('.fp-steps .dot').forEach(d=>{
+    const i = Number(d.dataset.step);
+    d.classList.toggle('done', i < n);
+    d.classList.toggle('active', i === n);
+  });
+  $('#fpStepLabel').textContent = `Step ${n} of 3 · ${label}`;
+}
+function showFpError(title, sub){
+  $('#fpStep-intro').classList.add('hide');
+  $('#fpStep-scan').classList.add('hide');
+  $('#fpStep-done').classList.add('hide');
+  $('#fpStep-error').classList.remove('hide');
+  $('#fpErrTitle').textContent = title;
+  $('#fpErrSub').textContent = sub;
+}
+function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+
 $('#enrollFaceBtn').addEventListener('click', async e=>{
   const s = getSession(); if (!s) return;
   busy(e.target,true,'Enroll');
