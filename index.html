@@ -876,10 +876,14 @@ async function onFaceDetected(descriptor){
       toast('Face enrolled ✓ (5 samples)','ok');
       refreshBioStatus();
     } else if (ctx.mode === 'capture'){
+      // Face found — close camera UI and show the "Verifying…" animation.
+      // The modal stays open with the overlay; doPunch() will call
+      // finalizeFaceCapture() once the server confirms/denies the match.
       const resolve = ctx._resolve; ctx._resolve = null;
       stopFaceLoop();
-      closeModal($('#faceModal'));
-      faceContext = null;
+      ctx.verifying = true;
+      ctx.verifyingAt = Date.now();
+      showFaceOverlay('verifying','Verifying…','Hold still');
       resolve(descriptor);
       return;
     } else { // 'login'
@@ -939,6 +943,25 @@ function hideFaceOverlay(){
 }
 function wait(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
+/* Finish a face-capture flow that's currently parked on the "Verifying…"
+   overlay. Shows success/error state for a beat, then tears down the modal. */
+async function finalizeFaceCapture(state, label, sub){
+  if (!faceContext || faceContext.mode !== 'capture' || !faceContext.verifying){
+    // Modal already closed (e.g. fingerprint flow) — nothing to do.
+    return;
+  }
+  const MIN_VERIFY_MS = 900;
+  const elapsed = Date.now() - (faceContext.verifyingAt || Date.now());
+  if (elapsed < MIN_VERIFY_MS) await wait(MIN_VERIFY_MS - elapsed);
+  showFaceOverlay(state, label, sub);
+  await wait(state === 'success' ? 850 : 1200);
+  stopFaceLoop();
+  closeModal($('#faceModal'));
+  hideFaceOverlay();
+  faceContext = null;
+}
+
+
 // Local Euclidean — used during multi-sample enrollment.
 function euclid(a, b){
   let s = 0;
@@ -949,6 +972,9 @@ function euclid(a, b){
 // Close handler — stop stream/loop and resolve capture promise with null.
 $('#faceModal').addEventListener('click', e=>{
   if (e.target.dataset.close!==undefined || e.target===$('#faceModal')){
+    // Don't let the user dismiss while we're showing the Verifying overlay —
+    // the punch request is in flight and finalizeFaceCapture() will close it.
+    if (faceContext && faceContext.verifying) return;
     stopFaceLoop();
     if (faceContext && faceContext._resolve){
       const r = faceContext._resolve; faceContext._resolve = null;
@@ -1247,25 +1273,23 @@ async function doPunch(kind){
   try {
     const auth = await authPromise;
 
-    // Optimistic UI: show "done" the moment biometric clears, even though
-    // the server write is still in flight.
-    const nowStr = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
-    if (kind === 'in'){
-      $('#inTime').textContent = nowStr;
-      $('#inSub').textContent  = 'Saving…';
-    } else {
-      $('#outTime').textContent = nowStr;
-      $('#outSub').textContent  = 'Saving…';
-    }
-    toast(kind==='in' ? `Checked in ✓` : `Checked out ✓`,'ok');
+    // Mild feedback on the button itself — the real "Checked In/Out" reveal
+    // happens AFTER the server confirms (and, for face auth, plays inside
+    // the face modal's verifying → success/error animation).
+    if (kind === 'in') $('#inSub').textContent = 'Saving…';
+    else                $('#outSub').textContent = 'Saving…';
 
     const loc = await locPromise;
     if (!loc) throw new Error('Could not verify your device — please retry');
 
-    // Server round trip — happens silently in the background.
+    // Server round trip — for face auth this is where verification happens.
     const r = await api('punch', {
       email: s.email, kind, lat: loc.lat, lng: loc.lng, address: '', auth
     });
+
+    // Server accepted — reveal success inside the face overlay (if open),
+    // then update the dashboard.
+    await finalizeFaceCapture('success', kind==='in' ? 'Checked In' : 'Checked Out', 'Welcome');
 
     if (kind === 'in'){
       const row = { id:r.id, date:'', checkIn:r.time, checkOut:'', hours:'' };
@@ -1277,9 +1301,12 @@ async function doPunch(kind){
       todayState.open = null;
     }
     renderToday();
+    toast(kind==='in' ? 'Checked in ✓' : 'Checked out ✓', 'ok');
   } catch(err){
-    toast(err.message,'err');
-    // Revert optimistic UI on failure.
+    const msg = err.message || 'Something went wrong';
+    const looksLikeFaceMismatch = /face|match|verif/i.test(msg);
+    await finalizeFaceCapture('error', looksLikeFaceMismatch ? 'Face did not match' : 'Failed', 'Please try again');
+    toast(msg,'err');
     renderToday();
   } finally {
     btn.innerHTML = origHTML;
