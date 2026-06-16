@@ -706,23 +706,12 @@ $$('#empTabs button').forEach(b=>b.addEventListener('click',()=>{
 
 /* ═══════════ AUTH ═══════════ */
 const SESSION_KEY = 'pulse_session';
-const LAST_EMAIL_KEY = 'pulse_last_email';
 
 function setSession(user){
   LS.set(SESSION_KEY, { ...user, at: Date.now() });
-  if (user && user.email) LS.set(LAST_EMAIL_KEY, user.email);
 }
 function getSession(){ return LS.get(SESSION_KEY); }
-function getLastEmail(){ return LS.get(LAST_EMAIL_KEY) || null; }
 function clearSession(){ LS.del(SESSION_KEY); }
-
-/* Friendly WebAuthn error: collapse the verbose
-   "operation either timed out or was not allowed…" into a single line. */
-function friendlyBioError(err){
-  const msg = (err && (err.message || err.name)) || '';
-  if (/NotAllowed|timed out|not allowed/i.test(msg)) return 'The operation timed out.';
-  return msg || 'Authentication failed';
-}
 
 $('#goRegister').addEventListener('click', e=>{ e.preventDefault(); openModal('regModal'); });
 
@@ -835,12 +824,7 @@ function askEmail(title, sub){
 
 $('#bioFingerBtn').addEventListener('click', async ()=>{
   try {
-    // No email prompt — use the last signed-in identity on this device.
-    // If we've never signed in here, fall back to asking once.
-    let email = getLastEmail();
-    if (!email){
-      email = await askEmail('Fingerprint sign in','First-time sign in on this device — enter your email.');
-    }
+    const email = await askEmail('Fingerprint sign in','We need your email to find your enrolled fingerprint.');
     const info = await api('getBiometricInfo',{ email });
     const fp = info.items.find(i=>i.type==='fingerprint');
     if (!fp){
@@ -851,18 +835,15 @@ $('#bioFingerBtn').addEventListener('click', async ()=>{
     const credId = await webauthnAssert(fp.credentialId);
     const r = await api('verifyFingerprint',{ email, credentialId: credId });
     setSession(r.user); toast('Welcome back ✨','ok'); showEmployee();
-  } catch(err){ toast(friendlyBioError(err),'err'); }
+  } catch(err){ toast(err.message || 'Fingerprint failed','err'); }
 });
 
 $('#bioFaceBtn').addEventListener('click', async ()=>{
   try {
-    let email = getLastEmail();
-    if (!email){
-      email = await askEmail('Face sign in','First-time sign in on this device — enter your email.');
-    }
+    const email = await askEmail('Face sign in','We need your email to find your enrolled face.');
     await loadFaceModels();
     openFaceModal('login', email);
-  } catch(err){ toast(friendlyBioError(err),'err'); }
+  } catch(err){ toast(err.message || 'Face setup failed','err'); }
 });
 
 /* ═══════════ FACE RECOGNITION ═══════════ */
@@ -1222,28 +1203,15 @@ $('#enrollFaceBtn').addEventListener('click', async e=>{
 });
 
 /* ═══════════ GEOLOCATION ═══════════ */
-let locationGranted = false;
-
 function getLocation(){
   return new Promise((resolve,reject)=>{
     if (!navigator.geolocation) return reject(new Error('Geolocation unavailable'));
     navigator.geolocation.getCurrentPosition(
-      p => { locationGranted = true; syncPunchButtons(); resolve({ lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy }); },
-      e => { locationGranted = false; syncPunchButtons(); reject(new Error('Location: '+e.message)); },
+      p => resolve({ lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy }),
+      e => reject(new Error('Location: '+e.message)),
       { enableHighAccuracy:true, timeout:15000, maximumAge:30000 }
     );
   });
-}
-// Triggered right after login — prompts the OS permission dialog so the user
-// grants location BEFORE they ever try to Check In. Like a secure banking app,
-// no biometric prompt fires until location is granted.
-async function ensureLocation(){
-  try { await getLocation(); }
-  catch(e){
-    locationGranted = false;
-    syncPunchButtons();
-    toast('Location permission is required to check in/out','err');
-  }
 }
 async function reverseGeocode(lat,lng){
   try {
@@ -1358,25 +1326,22 @@ async function doPunch(kind){
   const origHTML = btn.innerHTML;
   btn.disabled = true; otherBtn.disabled = true;
 
-  // Secure-banking flow: location MUST be granted BEFORE the biometric
-  // prompt fires. We re-request a fresh fix here; if the user previously
-  // denied, the OS dialog will re-appear and we abort cleanly on failure.
-  let loc;
-  try {
-    loc = await getLocation();
-  } catch(e){
-    busyPunching = false;
-    btn.innerHTML = origHTML;
-    syncPunchButtons();
-    return toast('Location permission is required to check in/out','err');
-  }
+  // Kick off auth + location in parallel BEFORE touching the UI — the
+  // WebAuthn prompt should appear the instant the user taps.
+  const locPromise  = getLocation().catch(()=>null);
+  const authPromise = buildAuth(s.email);
 
   try {
-    // Now (and only now) prompt for fingerprint / face.
-    const auth = await buildAuth(s.email);
+    const auth = await authPromise;
 
+    // Mild feedback on the button itself — the real "Checked In/Out" reveal
+    // happens AFTER the server confirms (and, for face auth, plays inside
+    // the face modal's verifying → success/error animation).
     if (kind === 'in') $('#inSub').textContent = 'Saving…';
     else                $('#outSub').textContent = 'Saving…';
+
+    const loc = await locPromise;
+    if (!loc) throw new Error('Could not verify your device — please retry');
 
     // Server round trip — for face auth this is where verification happens.
     const r = await api('punch', {
@@ -1403,7 +1368,7 @@ async function doPunch(kind){
       setTimeout(()=> openModal('dykModal'), 3000);
     }
   } catch(err){
-    const msg = friendlyBioError(err);
+    const msg = err.message || 'Something went wrong';
     const looksLikeFaceMismatch = /face|match|verif/i.test(msg);
     await finalizeFaceCapture('error', looksLikeFaceMismatch ? 'Face did not match' : 'Failed', 'Please try again');
     toast(msg,'err');
@@ -1419,16 +1384,12 @@ async function doPunch(kind){
 function syncPunchButtons(){
   const hasOpen = !!todayState.open;
   const hasBio  = !!(bioCache && (bioCache.fingerprint || bioCache.face));
-  const canPunch = hasBio && locationGranted;
-  $('#checkInBtn').disabled  = !canPunch || hasOpen;
-  $('#checkOutBtn').disabled = !canPunch || !hasOpen;
+  $('#checkInBtn').disabled  = !hasBio || hasOpen;
+  $('#checkOutBtn').disabled = !hasBio || !hasOpen;
   // Helpful sub-label when locked
   if (!hasBio){
     $('#inSub').textContent  = 'Enroll a biometric to enable';
     $('#outSub').textContent = 'Enroll a biometric to enable';
-  } else if (!locationGranted){
-    $('#inSub').textContent  = 'Allow location to enable';
-    $('#outSub').textContent = 'Allow location to enable';
   }
 }
 
@@ -1506,9 +1467,6 @@ function showEmployee(){
   loadToday();
   refreshBioStatus();
   primeBioCache(s.email);
-  // Like a secure banking app: trigger the OS location prompt right after
-  // login. Check In/Out stay disabled until permission is granted.
-  ensureLocation();
 }
 function showAdmin(){
   $('#authScreen').classList.add('hide');
