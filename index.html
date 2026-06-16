@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
 <meta name="theme-color" content="#fef9f4" />
-<title>Pulse — Attendance Portal</title>
+<title>Veclar Pulse — Attendance Portal</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -241,6 +241,44 @@ html.dark .bio-card{background:rgba(255,255,255,.04)}
 .skeleton{background:linear-gradient(90deg,var(--line) 0%,var(--line-2) 50%,var(--line) 100%);background-size:200% 100%;animation:shim 1.4s infinite;border-radius:8px}
 @keyframes shim{to{background-position:-200% 0}}
 
+/* ─────────── theme variants (cycled by clicking the Pulse logo) ─────────── */
+html[data-theme="aurora"]{
+  --brand:#7c5cff; --brand-2:#ff7ab6; --accent:#ffb86b;
+  --grad:linear-gradient(135deg,#7c5cff 0%,#ff7ab6 55%,#ffb86b 100%);
+  --grad-soft:linear-gradient(135deg,#efe9ff 0%,#ffe9f3 55%,#fff1e1 100%);
+}
+html[data-theme="ocean"]{
+  --bg:#f1f7fb; --brand:#0ea5e9; --brand-2:#22d3ee; --accent:#38bdf8;
+  --grad:linear-gradient(135deg,#0ea5e9 0%,#22d3ee 55%,#38bdf8 100%);
+  --grad-soft:linear-gradient(135deg,#e0f2fe 0%,#cffafe 55%,#e0f7fa 100%);
+}
+html[data-theme="ocean"].dark{ --bg:#06141f; --bg-2:#0b2231; --card-solid:#0f2a3b; }
+html[data-theme="sunset"]{
+  --bg:#fff5ee; --brand:#f97316; --brand-2:#ef4444; --accent:#facc15;
+  --grad:linear-gradient(135deg,#f97316 0%,#ef4444 55%,#facc15 100%);
+  --grad-soft:linear-gradient(135deg,#ffedd5 0%,#fee2e2 55%,#fef9c3 100%);
+}
+html[data-theme="sunset"].dark{ --bg:#1f0d05; --bg-2:#2a140a; --card-solid:#2f1610; }
+html[data-theme="forest"]{
+  --bg:#f1faf3; --brand:#16a34a; --brand-2:#0d9488; --accent:#a3e635;
+  --grad:linear-gradient(135deg,#16a34a 0%,#0d9488 55%,#a3e635 100%);
+  --grad-soft:linear-gradient(135deg,#dcfce7 0%,#ccfbf1 55%,#ecfccb 100%);
+}
+html[data-theme="forest"].dark{ --bg:#04130a; --bg-2:#0a1f12; --card-solid:#0e2418; }
+html[data-theme="mono"]{
+  --bg:#f5f5f7; --brand:#111827; --brand-2:#4b5563; --accent:#9ca3af;
+  --grad:linear-gradient(135deg,#111827 0%,#4b5563 55%,#9ca3af 100%);
+  --grad-soft:linear-gradient(135deg,#e5e7eb 0%,#f3f4f6 55%,#ffffff 100%);
+}
+html[data-theme="mono"].dark{ --bg:#0a0a0b; --bg-2:#161618; --card-solid:#1c1c20; }
+
+/* a tiny "you can theme it" hint pulse on the logo */
+.brand .logo{cursor:pointer;transition:transform .25s}
+.brand .logo:hover{transform:rotate(-8deg) scale(1.06)}
+
+/* ─────────── action buttons disabled look ─────────── */
+.act:disabled{opacity:.45;cursor:not-allowed;filter:grayscale(.4)}
+
 .hide{display:none !important}
 .fadein{animation:fade .35s ease both}
 
@@ -255,10 +293,10 @@ html.dark .bio-card{background:rgba(255,255,255,.04)}
   <!-- TOP BAR -->
   <div class="topbar">
     <div class="brand">
-      <span class="logo">
+      <button class="logo" id="logoThemeBtn" title="Click to change theme" aria-label="Change theme">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
-      </span>
-      <span>Pulse</span>
+      </button>
+      <span>Veclar Pulse</span>
     </div>
     <div class="row" style="gap:8px">
       <button class="theme-btn" id="signoutBtn" title="Sign out" style="display:none">
@@ -325,11 +363,11 @@ html.dark .bio-card{background:rgba(255,255,255,.04)}
       </div>
 
       <div class="action-grid">
-        <button class="act act-in" id="checkInBtn">
+        <button class="act act-in" id="checkInBtn" disabled>
           <span class="ico-wrap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
           <span class="label">Check in</span>
           <span class="title" id="inTime">Tap to start</span>
-          <span class="sub" id="inSub">Begin your work day</span>
+          <span class="sub" id="inSub">Enroll a biometric to enable</span>
         </button>
         <button class="act act-out" id="checkOutBtn" disabled>
           <span class="ico-wrap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></span>
@@ -552,8 +590,16 @@ html.dark .bio-card{background:rgba(255,255,255,.04)}
   </div>
 </div>
 
-
-
+<!-- ─── DID YOU KNOW (first-time tip) ─── -->
+<div class="modal-bg" id="dykModal">
+  <div class="modal" style="position:relative;max-width:380px;text-align:center">
+    <button class="theme-btn close" data-close>✕</button>
+    <div style="font-size:42px;margin:6px 0 4px">💡</div>
+    <h3 style="margin:0 0 8px">Did you know?</h3>
+    <p class="muted" style="margin:0 0 18px">You can change the theme by clicking the Pulse icon at the top-left corner.</p>
+    <button class="btn btn-primary btn-block" data-close>Got it</button>
+  </div>
+</div>
 
 <div id="toast"></div>
 
@@ -603,13 +649,26 @@ $$('.modal-bg').forEach(m=>{
   m.querySelectorAll('[data-close]').forEach(b=>b.addEventListener('click',()=>closeModal(m)));
 });
 
-/* ─────────── theme ─────────── */
+/* ─────────── theme (dark toggle + Pulse-icon 5-theme cycler) ─────────── */
+const THEMES = ['aurora','ocean','sunset','forest','mono'];
 (function initTheme(){
-  const saved = LS.get('theme') || (matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');
-  if (saved==='dark') document.documentElement.classList.add('dark');
+  const savedDark = LS.get('theme') || (matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');
+  if (savedDark==='dark') document.documentElement.classList.add('dark');
+  // Session-only color theme (resets on new session)
+  const savedPalette = sessionStorage.getItem('pulse_palette') || 'aurora';
+  document.documentElement.setAttribute('data-theme', savedPalette);
+
   $('#themeBtn').addEventListener('click',()=>{
     document.documentElement.classList.toggle('dark');
     LS.set('theme', document.documentElement.classList.contains('dark')?'dark':'light');
+  });
+
+  $('#logoThemeBtn').addEventListener('click',()=>{
+    const cur = document.documentElement.getAttribute('data-theme') || 'aurora';
+    const next = THEMES[(THEMES.indexOf(cur)+1) % THEMES.length];
+    document.documentElement.setAttribute('data-theme', next);
+    sessionStorage.setItem('pulse_palette', next);
+    toast('Theme: ' + next.charAt(0).toUpperCase()+next.slice(1), 'ok');
   });
 })();
 
@@ -706,7 +765,7 @@ $('#signoutBtn').addEventListener('click',()=>{
 
 /* ═══════════ WEBAUTHN (fingerprint) ═══════════ */
 const RP_ID = location.hostname || 'localhost';
-const RP_NAME = 'Pulse Attendance';
+const RP_NAME = 'Veclar Pulse Attendance';
 
 function b64uEncode(buf){
   return btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/=/g,'').replace(/\+/g,'-').replace(/\//g,'_');
@@ -997,6 +1056,7 @@ async function refreshBioStatus(){
     $('#fingerStatus').classList.toggle('off', !fp);
     $('#faceStatus').textContent   = face ? 'Active' : 'Not set';
     $('#faceStatus').classList.toggle('off', !face);
+    syncPunchButtons();
   } catch{}
 }
 $('#enrollFingerBtn').addEventListener('click', async ()=>{
@@ -1223,6 +1283,7 @@ async function primeBioCache(email){
     const face = info.items.find(i=>i.type==='face');
     bioCache = { fingerprint: fp ? { credentialId: fp.credentialId } : null, face: !!face };
   } catch { bioCache = null; }
+  syncPunchButtons();
 }
 
 /* Build the auth payload for the unified `punch` action.
@@ -1302,6 +1363,10 @@ async function doPunch(kind){
     }
     renderToday();
     toast(kind==='in' ? 'Checked in ✓' : 'Checked out ✓', 'ok');
+    if (kind === 'in' && !LS.get('pulse_dyk_seen')){
+      LS.set('pulse_dyk_seen', true);
+      setTimeout(()=> openModal('dykModal'), 3000);
+    }
   } catch(err){
     const msg = err.message || 'Something went wrong';
     const looksLikeFaceMismatch = /face|match|verif/i.test(msg);
@@ -1318,8 +1383,14 @@ async function doPunch(kind){
 
 function syncPunchButtons(){
   const hasOpen = !!todayState.open;
-  $('#checkInBtn').disabled  = hasOpen;
-  $('#checkOutBtn').disabled = !hasOpen;
+  const hasBio  = !!(bioCache && (bioCache.fingerprint || bioCache.face));
+  $('#checkInBtn').disabled  = !hasBio || hasOpen;
+  $('#checkOutBtn').disabled = !hasBio || !hasOpen;
+  // Helpful sub-label when locked
+  if (!hasBio){
+    $('#inSub').textContent  = 'Enroll a biometric to enable';
+    $('#outSub').textContent = 'Enroll a biometric to enable';
+  }
 }
 
 function renderToday(){
@@ -1418,6 +1489,22 @@ function showAuth(){
 $('#monthPicker').addEventListener('change', loadAdminMonth);
 $('#refreshBtn').addEventListener('click', loadAdminMonth);
 
+function locCell(lat, lng, addr){
+  const hasCoords = (lat !== '' && lat != null && lng !== '' && lng != null);
+  if (!hasCoords && !addr) return `<span class="muted" style="font-size:11px">—</span>`;
+  const latN = Number(lat), lngN = Number(lng);
+  const coord = hasCoords && !isNaN(latN) && !isNaN(lngN)
+    ? `${latN.toFixed(5)}, ${lngN.toFixed(5)}` : '';
+  const mapHref = hasCoords ? `https://www.google.com/maps?q=${latN},${lngN}` : '';
+  const addrShort = addr ? (addr.length>28 ? addr.slice(0,28)+'…' : addr) : '';
+  return `
+    <div class="col" style="gap:2px;min-width:140px">
+      ${coord ? `<a href="${mapHref}" target="_blank" rel="noopener" style="font-size:11px;font-weight:600">${coord}</a>` : ''}
+      ${addrShort ? `<span class="muted" style="font-size:10px" title="${(addr||'').replace(/"/g,'&quot;')}">${addrShort}</span>` : ''}
+    </div>`;
+}
+
+
 async function loadAdminMonth(){
   const pw = sessionStorage.getItem('admPw');
   const month = $('#monthPicker').value;
@@ -1436,8 +1523,8 @@ async function loadAdminMonth(){
         <td><input class="cell-input" data-k="checkIn" value="${row.checkIn||''}" type="time" step="1"></td>
         <td><input class="cell-input" data-k="checkOut" value="${row.checkOut||''}" type="time" step="1"></td>
         <td>${tag}</td>
-        <td><span class="muted" style="font-size:11px" title="${row.inAddr||''}">${(row.inAddr||'—').slice(0,28)}${(row.inAddr||'').length>28?'…':''}</span></td>
-        <td><span class="muted" style="font-size:11px" title="${row.outAddr||''}">${(row.outAddr||'—').slice(0,28)}${(row.outAddr||'').length>28?'…':''}</span></td>
+        <td>${locCell(row.inLat, row.inLng, row.inAddr)}</td>
+        <td>${locCell(row.outLat, row.outLng, row.outAddr)}</td>
         <td><input class="cell-input" data-k="note" value="${(row.note||'').replace(/"/g,'&quot;')}" placeholder="—"></td>
         <td><button class="icon-btn" data-del title="Delete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg></button></td>
       </tr>`;
