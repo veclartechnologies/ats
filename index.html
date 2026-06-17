@@ -608,7 +608,7 @@ html[data-theme="mono"].dark{ --bg:#0a0a0b; --bg-2:#161618; --card-solid:#1c1c20
 /* ═══════════════════════════════════════════════════════════════
    CONFIG — paste your Google Apps Script Web App URL here
    ═══════════════════════════════════════════════════════════════ */
-const API_URL = "https://script.google.com/macros/s/AKfycbw9e32G0vfcHNHqQx6c2uaiOQvjkked1lVpYQV1PPoQv1efouB3MTuGKgkhcRodbi1X/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbyDeUJvTbGp0L7NN9ZJ-yNzxqAN_ohe2OTXm-voYv-gRep81iExswcbU6PRNoYyYJGS/exec";
 
 const FACE_MODELS = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13/model";
 
@@ -1282,6 +1282,14 @@ async function primeBioCache(email){
     const fp   = info.items.find(i=>i.type==='fingerprint');
     const face = info.items.find(i=>i.type==='face');
     bioCache = { fingerprint: fp ? { credentialId: fp.credentialId } : null, face: !!face };
+    // Keep the session's policy in sync with the server in case the admin
+    // changed it (e.g. flipped this employee to "None") while signed in.
+    if (info.authentication){
+      const s = getSession();
+      if (s && s.authentication !== info.authentication){
+        setSession({ ...s, authentication: info.authentication });
+      }
+    }
   } catch { bioCache = null; }
   syncPunchButtons();
 }
@@ -1289,6 +1297,11 @@ async function primeBioCache(email){
 /* Build the auth payload for the unified `punch` action.
    Fingerprint first (instant prompt via cache); on failure → face fallback modal. */
 async function buildAuth(email){
+  // If admin marked this employee's policy as "None", skip biometrics
+  // entirely — the server will accept a {type:'none'} payload for them.
+  const s = getSession();
+  if (s && s.authentication === 'None') return { type:'none' };
+
   if (!bioCache) await primeBioCache(email);
   const hasFp   = !!(bioCache && bioCache.fingerprint);
   const hasFace = !!(bioCache && bioCache.face);
@@ -1383,11 +1396,15 @@ async function doPunch(kind){
 
 function syncPunchButtons(){
   const hasOpen = !!todayState.open;
+  const s = getSession();
+  // Employees on the "None" policy don't need any biometric to punch.
+  const noBioRequired = !!(s && s.authentication === 'None');
   const hasBio  = !!(bioCache && (bioCache.fingerprint || bioCache.face));
-  $('#checkInBtn').disabled  = !hasBio || hasOpen;
-  $('#checkOutBtn').disabled = !hasBio || !hasOpen;
+  const ready   = noBioRequired || hasBio;
+  $('#checkInBtn').disabled  = !ready || hasOpen;
+  $('#checkOutBtn').disabled = !ready || !hasOpen;
   // Helpful sub-label when locked
-  if (!hasBio){
+  if (!ready){
     $('#inSub').textContent  = 'Enroll a biometric to enable';
     $('#outSub').textContent = 'Enroll a biometric to enable';
   }
