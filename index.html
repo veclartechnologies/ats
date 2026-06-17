@@ -1205,10 +1205,16 @@ $('#enrollFaceBtn').addEventListener('click', async e=>{
 /* ═══════════ GEOLOCATION ═══════════ */
 function getLocation(){
   return new Promise((resolve,reject)=>{
-    if (!navigator.geolocation) return reject(new Error('Geolocation unavailable'));
+    if (!navigator.geolocation) return reject(new Error('Geolocation is not supported on this device'));
     navigator.geolocation.getCurrentPosition(
       p => resolve({ lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy }),
-      e => reject(new Error('Location: '+e.message)),
+      e => {
+        let msg = 'Could not get your location — please try again';
+        if (e.code === 1) msg = 'Location permission denied — please allow location access and try again';
+        else if (e.code === 2) msg = 'Location unavailable — check your GPS / network and try again';
+        else if (e.code === 3) msg = 'Location request timed out — please try again';
+        reject(new Error(msg));
+      },
       { enableHighAccuracy:true, timeout:15000, maximumAge:30000 }
     );
   });
@@ -1341,7 +1347,8 @@ async function doPunch(kind){
 
   // Kick off auth + location in parallel BEFORE touching the UI — the
   // WebAuthn prompt should appear the instant the user taps.
-  const locPromise  = getLocation().catch(()=>null);
+  let locErr = null;
+  const locPromise  = getLocation().catch(e => { locErr = e; return null; });
   const authPromise = buildAuth(s.email);
 
   try {
@@ -1354,7 +1361,7 @@ async function doPunch(kind){
     else                $('#outSub').textContent = 'Saving…';
 
     const loc = await locPromise;
-    if (!loc) throw new Error('Could not verify your device — please retry');
+    if (!loc) throw new Error(locErr ? locErr.message : 'Could not get your location — please try again');
 
     // Server round trip — for face auth this is where verification happens.
     const r = await api('punch', {
